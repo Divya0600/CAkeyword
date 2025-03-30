@@ -1,10 +1,10 @@
 
-FROM python:3.10-slim AS build
+FROM python:3.12-slim AS build
 
 WORKDIR /usr/app
 RUN python -m venv /usr/app/venv
 ENV PATH="/usr/app/venv/bin:$PATH"
-
+#RUN apt update && apt upgrade
 RUN python -m pip install --upgrade pip
 RUN apt upgrade perl-base
 
@@ -16,13 +16,13 @@ COPY ./ranking_features-0.2.3-py3-none-any.whl ./
 RUN pip install -r requirements.txt
 RUN pip install ranking_features-0.2.3-py3-none-any.whl
 
-RUN python -m spacy download en_core_web_sm
-RUN python -m spacy download fr_core_news_sm
+#RUN python -m spacy download en_core_web_sm
+#RUN python -m spacy download fr_core_news_sm
 
 #Remove pip.conf so that we don't expose token
 # RUN rm /root/.config/pip/pip.conf
 
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 RUN adduser --disabled-password worker
 
@@ -36,8 +36,12 @@ COPY --from=build /usr/app/venv /home/worker/venv
 COPY --chown=worker:worker /data /home/worker/data
 COPY --chown=worker:worker /src /home/worker/src
 
+ADD ./data/modelsv2/spacy_models/en_core_web_sm-3.4.0 /app/en_core_web_sm
+
+
+
 ENV PATH="/home/worker/venv/bin:$PATH"
 
 EXPOSE 8080
 
-CMD python -m uvicorn src.main:app --reload --port 8080 --host 0.0.0.0
+CMD ["python", "-m", "uvicorn", "src.main:app", "--reload", "--port", "8080", "--host", "0.0.0.0"]
