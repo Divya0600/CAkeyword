@@ -14,13 +14,12 @@ from src.logger import logger
 
 router = APIRouter()
 
-
-#At some point it might be relevant to export this to a database.
+# At some point it might be relevant to export this to a database.
 keyword_df = None
 vectorizers = {}
 
 DATA_FOLDER_PATH = Path.cwd()/'data'
-KEYWORDS_FILE = 'global_keywords_df.csv'
+KEYWORDS_FILE = 'global_keywords_df_enhanced.csv'
 
 KEYWORD_FIELDS = KeywordDataFrameFields(
     id_field='KeywordID', eng_name_field='KeywordNamesEN',
@@ -33,15 +32,34 @@ async def init():
     global keyword_df
     # Skill and job database should be encapsulated in database for easier update.
     # Dataframe creation
-    keyword_df = pd.read_csv(os.path.join(DATA_FOLDER_PATH, KEYWORDS_FILE), converters={KEYWORD_FIELDS.fr_name_field: eval})
-    keyword_df = keyword_df.explode(KEYWORD_FIELDS.fr_name_field)[[getattr(KEYWORD_FIELDS, field.name) for field in fields(KEYWORD_FIELDS)]]
+    try:
+        logger.info(f'Loading keywords from {DATA_FOLDER_PATH}/{KEYWORDS_FILE}')
+        df = pd.read_csv(os.path.join(DATA_FOLDER_PATH, KEYWORDS_FILE), 
+                        converters={KEYWORD_FIELDS.fr_name_field: eval})
+        
+        # Select only the columns needed for vectorization (exclude GlobalID)
+        columns_needed = [KEYWORD_FIELDS.id_field, KEYWORD_FIELDS.eng_name_field, 
+                          KEYWORD_FIELDS.fr_name_field, KEYWORD_FIELDS.idf_field]
+        
+        keyword_df = df[columns_needed]
+        keyword_df = keyword_df.explode(KEYWORD_FIELDS.fr_name_field)
+        
+        # Optional: Log information about the loaded keywords
+        logger.info(f'Loaded {len(keyword_df)} keyword entries')
+        logger.info(f'Unique keywords: {keyword_df[KEYWORD_FIELDS.id_field].nunique()}')
+        logger.info(f'Columns in dataframe: {keyword_df.columns.tolist()}')
+        
+        logger.info('Creating vectorizers with the enhanced keyword database.')
+        global vectorizers
+        vectorizers = create_skills_job_vectorizers(keyword_df, KEYWORD_FIELDS)
+        logger.info(f'Created vectorizers for languages: {list(vectorizers.keys())}')
+        
+    except Exception as e:
+        logger.error(f'Error during initialization: {e}', exc_info=True)
+        # Continue with empty vectorizers as a fallback
+        vectorizers = {}
 
-    logger.info('Creating vectorizers.')
-    global vectorizers
-    vectorizers = create_skills_job_vectorizers(keyword_df, KEYWORD_FIELDS)
-
-    logger.info('Data loaded')
-
+    logger.info('Initialization completed')
 
 @router.post("/extract-keyword")
 async def extract_keyword(extraction_input: KeywordExtractionInput):
@@ -56,6 +74,16 @@ async def extract_keyword(extraction_input: KeywordExtractionInput):
     logger.info('Extracting keywords')
     job_content = extraction_input.jobContent
     language = detect_language(job_content)
+    logger.info(f'Detected language: {language}')
+    
+    # Handle missing language vectorizer
+    if language not in vectorizers:
+        logger.warning(f'No vectorizer for {language}, falling back to English')
+        language = 'en'
+        
+        if language not in vectorizers:
+            logger.error('No vectorizers available. Cannot extract keywords.')
+            return KeywordExtractionOutput(keywords=[])
 
     try:
         keyword_ids = extract_keywords(docs=job_content, vectorizer=vectorizers[language])
@@ -74,7 +102,6 @@ async def extract_keyword(extraction_input: KeywordExtractionInput):
         logger.info(f'{len(keyword_lst)} keywords extracted.')
 
     return KeywordExtractionOutput(keywords=keyword_lst)
-
 
 @router.get("/search-keywords")
 async def suggestion(pattern: Union[str, None]):
